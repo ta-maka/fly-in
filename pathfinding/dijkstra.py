@@ -5,7 +5,7 @@ Built from scratch using only the standard library's heapq module
 subject's constraint forbidding graph libraries like networkx.
 """
 
-from __future__ import annotations
+from __future__ import annotations############################
 
 import heapq
 from typing import Dict, List, Optional, Set, Tuple
@@ -21,7 +21,11 @@ class Dijkstra:
     """Computes the lowest-cost route between two zones in a Graph."""
 
     def find_path(
-        self, graph: Graph, start: Zone, end: Zone
+        self,
+        graph: Graph,
+        start: Zone,
+        end: Zone,
+        excluded_connections: Optional[Set[Connection]] = None,
     ) -> Optional[PathResult]:
         """Find the lowest-cost route from `start` to `end`.
 
@@ -33,11 +37,17 @@ class Dijkstra:
             graph: The graph to search within.
             start: The zone to start from.
             end: The zone to reach.
+            excluded_connections: Connections to treat as if they
+                did not exist. Used by `find_multiple_paths` to force
+                genuinely different routes on each call.
 
         Returns:
             Optional[PathResult]: The best route found, or None if
             `end` is unreachable from `start`.
         """
+        if excluded_connections is None:
+            excluded_connections = set()
+
         best_cost: Dict[str, int] = {start.name: 0}
         best_priority_count: Dict[str, int] = {start.name: 0}
         came_from: Dict[str, Tuple[str, Connection]] = {}
@@ -62,6 +72,9 @@ class Dijkstra:
             current_zone = graph.zones[current_name]
 
             for connection in graph.neighbors(current_name):
+                if connection in excluded_connections:
+                    continue
+
                 neighbor_zone = connection.other_end(current_zone)
 
                 if not neighbor_zone.zone_type.is_passable:
@@ -95,6 +108,42 @@ class Dijkstra:
             return None
 
         return self._build_path_result(graph, start, end, came_from, best_cost[end.name])
+
+    def find_multiple_paths(
+        self, graph: Graph, start: Zone, end: Zone, max_paths: int
+    ) -> List[PathResult]:
+        """Find up to `max_paths` distinct routes from `start` to `end`.
+
+        Each call finds the best remaining route while excluding every
+        connection already used by a previously found route, forcing
+        genuinely different paths (edge-disjoint where possible) rather
+        than the same shortest path repeated. This lets drones be
+        distributed across multiple routes instead of all queuing on
+        a single shared bottleneck.
+
+        Args:
+            graph: The graph to search within.
+            start: The zone to start from.
+            end: The zone to reach.
+            max_paths: The maximum number of distinct routes to find.
+
+        Returns:
+            List[PathResult]: Between 0 and `max_paths` routes, ordered
+            from best (lowest cost) to worst. Returns fewer than
+            `max_paths` if the graph does not have that many distinct
+            routes available.
+        """
+        found_paths: List[PathResult] = []
+        excluded_connections: Set[Connection] = set()
+
+        for _ in range(max_paths):
+            path = self.find_path(graph, start, end, excluded_connections)
+            if path is None:
+                break
+            found_paths.append(path)
+            excluded_connections.update(path.connections)
+
+        return found_paths
 
     @staticmethod
     def _is_better_candidate(

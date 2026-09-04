@@ -37,20 +37,25 @@ def main() -> int:
     start = graph.get_start()
     end = graph.get_end()
 
-    path = Dijkstra().find_path(graph, start, end)
-    if path is None:
+    # Look for several distinct routes (capped at 5, and never more
+    # than there are drones to spread across them) so drones can be
+    # distributed instead of all queuing on one shared bottleneck.
+    max_paths = min(nb_drones, 5)
+    paths = Dijkstra().find_multiple_paths(graph, start, end, max_paths)
+    if not paths:
         print(
             f"error: no route exists from '{start.name}' to '{end.name}'",
             file=sys.stderr,
         )
         return 1
 
-    print(f"Route: {' -> '.join(path.zone_names)} (per-drone cost: {path.total_cost})")
+    for i, path in enumerate(paths, start=1):
+        print(f"Route {i}: {' -> '.join(path.zone_names)} (cost: {path.total_cost})")
     print(f"Drones: {nb_drones}")
     print()
 
     try:
-        engine = SimulationEngine(path, nb_drones)
+        engine = SimulationEngine(paths, nb_drones)
         turns = engine.run()
     except (ValueError, RuntimeError) as exc:
         print(f"simulation error: {exc}", file=sys.stderr)

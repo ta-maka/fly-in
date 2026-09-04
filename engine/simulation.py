@@ -9,46 +9,60 @@ from pathfinding.path_result import PathResult
 
 
 class SimulationEngine:
-    """Simulates multiple drones following a shared route, turn by turn.
+    """Simulates multiple drones, distributed across one or more routes.
 
-    All drones currently follow the same precomputed PathResult.
-    Zone and connection capacity are respected: a drone that cannot
-    advance because its next zone or connection is full simply waits
-    (produces no output token) that turn. Drones are processed in a
-    fixed, deterministic order (by drone_id) each turn, which is also
-    how "moving out of a zone frees capacity the same turn" (per the
-    subject) naturally falls out of the implementation: an earlier
-    drone's departure is visible to a later drone's capacity check
-    within the same turn.
+    Drones are assigned to the available routes round-robin (D1 on
+    route 0, D2 on route 1, D3 back to route 0 if only 2 routes exist,
+    and so on), so traffic is spread out instead of every drone
+    queuing on a single shared path. Zone and connection capacity are
+    still respected exactly as before: a drone that cannot advance
+    because its next zone or connection is full simply waits (produces
+    no output token) that turn. Since every route shares the same
+    underlying Zone and Connection objects, capacity is enforced
+    correctly across all drones regardless of which route each one
+    is following.
+
+    Drones are processed in a fixed, deterministic order (by
+    drone_id) each turn, which is also how "moving out of a zone
+    frees capacity the same turn" (per the subject) naturally falls
+    out of the implementation: an earlier drone's departure is
+    visible to a later drone's capacity check within the same turn.
     """
 
-    def __init__(self, path: PathResult, nb_drones: int) -> None:
-        """Initialize the engine with a shared route and drone count.
+    def __init__(self, paths: List[PathResult], nb_drones: int) -> None:
+        """Initialize the engine with one or more routes and a drone count.
 
         Args:
-            path: The route every drone will follow.
+            paths: One or more routes drones will be distributed
+                across, round-robin, in the order given.
             nb_drones: How many drones to simulate.
 
         Raises:
-            ValueError: If nb_drones is not a positive integer, or the
-                path has no zones.
+            ValueError: If nb_drones is not positive, if `paths` is
+                empty, or if any path has no zones.
         """
         if nb_drones <= 0:
-            raise ValueError(f"nb_drones must be positive, got {nb_drones}")################################
-            ########################################################################################################
-        if len(path.zones) == 0:
-            raise ValueError("path has no zones to simulate")
+            raise ValueError(f"nb_drones must be positive, got {nb_drones}")
+        if len(paths) == 0:
+            raise ValueError("at least one path is required")
+        for path in paths:
+            if len(path.zones) == 0:
+                raise ValueError("a path has no zones to simulate")
 
-        self.path = path
+        self.paths = paths
         self.nb_drones = nb_drones
-        self.drones: List[Drone] = [
-            Drone(f"D{i + 1}", path.zones[0]) for i in range(nb_drones)
-        ]
-        # For each drone, which index into path.zones it currently occupies
-        # (or is heading toward, while in transit).
-        self._path_index: Dict[str, int] = {
-            drone.drone_id: 0 for drone in self.drones
-        }
+        self.drones: List[Drone] = []
+        self._drone_path: Dict[str, PathResult] = {}
+        self._path_index: Dict[str, int] = {}
+
+        for i in range(nb_drones):
+            drone_id = f"D{i + 1}"
+            assigned_path = paths[i % len(paths)]##################
+            drone = Drone(drone_id, assigned_path.zones[0])
+            self.drones.append(drone)
+            self._drone_path[drone_id] = assigned_path
+            self._path_index[drone_id] = 0
+
         self._delivered_count = 0
 
     def run(self) -> List[List[str]]:
@@ -108,7 +122,7 @@ class SimulationEngine:
             str: The movement token for this turn (the arrival zone name).
         """
         drone.complete_restricted_transit()
-        assert drone.current_zone is not None############################################################
+        assert drone.current_zone is not None
         self._mark_delivered_if_at_end(drone)
         return f"{drone.drone_id}-{drone.current_zone.name}"
 
@@ -123,8 +137,9 @@ class SimulationEngine:
             None if it had to wait (no capacity available).
         """
         index = self._path_index[drone.drone_id]
-        next_zone = self.path.zones[index + 1]
-        connection = self.path.connections[index]
+        drone_path = self._drone_path[drone.drone_id]
+        next_zone = drone_path.zones[index + 1]
+        connection = drone_path.connections[index]
         cost = next_zone.zone_type.movement_cost
 
         if cost == 1:
@@ -140,16 +155,17 @@ class SimulationEngine:
         if not connection.has_capacity_for(1) or not next_zone.has_capacity_for(1):
             return None
         drone.enter_restricted_transit(connection, next_zone)
-        next_zone.add_occupant(drone.drone_id)  # reserve for the 2-turn crossing###################################
+        next_zone.add_occupant(drone.drone_id)  # reserve for the 2-turn crossing
         self._path_index[drone.drone_id] = index + 1
         return f"{drone.drone_id}-{connection.name}"
 
     def _mark_delivered_if_at_end(self, drone: Drone) -> None:
-        """Mark a drone delivered if it has reached the path's final zone.
+        """Mark a drone delivered if it has reached its path's final zone.
 
         Args:
             drone: The drone to check.
         """
-        if drone.current_zone is self.path.zones[-1]:
+        drone_path = self._drone_path[drone.drone_id]
+        if drone.current_zone is drone_path.zones[-1]:
             drone.mark_delivered()
             self._delivered_count += 1

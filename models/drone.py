@@ -68,9 +68,8 @@ class Drone:
         if self.is_in_transit:
             raise ValueError(
                 f"drone '{self.drone_id}' is in transit, cannot move directly"
-            )#########################################################
-        if self.current_zone is not None:#####################################################
-        ######################################
+            )
+        if self.current_zone is not None:
             self.current_zone.remove_occupant(self.drone_id)
         zone.add_occupant(self.drone_id)
         self.current_zone = zone
@@ -96,7 +95,7 @@ class Drone:
             raise ValueError(
                 f"drone '{self.drone_id}' is already in transit"
             )
-        if self.current_zone is not None:###########################################3333
+        if self.current_zone is not None:
             self.current_zone.remove_occupant(self.drone_id)
         connection.add_traveler(self.drone_id)
         self.transit_connection = connection
@@ -117,7 +116,7 @@ class Drone:
                 f"drone '{self.drone_id}' is not in transit, cannot complete one"
             )
         self.transit_connection.remove_traveler(self.drone_id)
-        self.transit_destination.add_occupant(self.drone_id)#############################################
+        self.transit_destination.add_occupant(self.drone_id)
         self.current_zone = self.transit_destination
         self.transit_connection = None
         self.transit_destination = None
