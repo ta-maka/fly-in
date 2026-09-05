@@ -5,7 +5,7 @@ Built from scratch using only the standard library's heapq module
 subject's constraint forbidding graph libraries like networkx.
 """
 
-from __future__ import annotations############################
+from __future__ import annotations
 
 import heapq
 from typing import Dict, List, Optional, Set, Tuple

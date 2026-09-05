@@ -57,7 +57,7 @@ class SimulationEngine:
 
         for i in range(nb_drones):
             drone_id = f"D{i + 1}"
-            assigned_path = paths[i % len(paths)]##################
+            assigned_path = paths[i % len(paths)]
             drone = Drone(drone_id, assigned_path.zones[0])
             self.drones.append(drone)
             self._drone_path[drone_id] = assigned_path

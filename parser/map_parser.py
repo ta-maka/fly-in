@@ -44,156 +44,14 @@ class ParseError(Exception):
         super().__init__(f"line {line_number}: {reason}")
 
 
-def _parse_metadata(raw: str, line_number: int) -> Dict[str, str]:
-    """Parse a bracketed metadata block into a key-value dict.
-
-    Args:
-        raw: The text found between '[' and ']', e.g.
-            "zone=restricted color=red max_drones=2".
-        line_number: The line this metadata came from, for errors.
-
-    Returns:
-        Dict[str, str]: Metadata keys mapped to their raw string values.
-
-    Raises:
-        ParseError: If a token inside the brackets is not valid key=value.
-    """
-    metadata: Dict[str, str] = {}
-    tokens = raw.split()
-
-    for token in tokens:
-        equals_count = token.count("=")
-
-        if equals_count != 1:
-            raise ParseError(line_number, f"invalid metadata token '{token}'")
-
-        parts = token.split("=")
-        key = parts[0]
-        value = parts[1]
-
-        if len(key) == 0:
-            raise ParseError(line_number, f"invalid metadata token '{token}'")
-
-        if len(value) == 0:
-            raise ParseError(line_number, f"invalid metadata token '{token}'")
-
-        metadata[key] = value
-
-    return metadata
-
-
-def _split_metadata(line: str, line_number: int) -> Tuple[str, Dict[str, str]]:
-    """Split a line into its main content and optional metadata dict.
-
-    Args:
-        line: The full line content after the type prefix.
-        line_number: The line number, for error reporting.
-
-    Returns:
-        Tuple[str, Dict[str, str]]: The content before any '[...]'
-        block, and the parsed metadata (empty dict if none present).
-
-    Raises:
-        ParseError: If brackets are unbalanced or malformed.
-    """
-    if "[" not in line:
-        if "]" in line:
-            raise ParseError(line_number, "unmatched ']' with no opening '['")
-        return line.strip(), {}
-
-    open_idx = line.index("[")
-    if not line.rstrip().endswith("]"):
-        raise ParseError(line_number, "metadata block missing closing ']'")
-    close_idx = line.rindex("]")
-    if close_idx < open_idx:
-        raise ParseError(line_number, "metadata block missing opening '['")
-
-    main_part = line[:open_idx].strip()
-    meta_part = line[open_idx + 1:close_idx].strip()
-    metadata = _parse_metadata(meta_part, line_number)
-    return main_part, metadata
-
-
-def _positive_int(value: str, field_name: str, line_number: int) -> int:
-    """Parse a string as a positive integer.
-
-    Args:
-        value: The raw string to parse.
-        field_name: The metadata field name, for error messages.
-        line_number: The line number, for error reporting.
-
-    Returns:
-        int: The parsed positive integer.
-
-    Raises:
-        ParseError: If the value is not a positive integer.
-    """
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ParseError(
-            line_number, f"'{field_name}' must be an integer, got '{value}'"
-        ) from exc
-    if parsed <= 0:
-        raise ParseError(
-            line_number, f"'{field_name}' must be a positive integer, got {parsed}"
-        )
-    return parsed
-
-
-def _validate_metadata_keys(
-    metadata: Dict[str, str], allowed_keys: Tuple[str, ...], line_number: int
-) -> None:
-    """Check that every metadata key is one of the allowed keys.
-
-    Args:
-        metadata: The parsed key-value metadata dict.
-        allowed_keys: The only keys permitted in this context.
-        line_number: The line number, for error reporting.
-
-    Raises:
-        ParseError: If any key in `metadata` is not in `allowed_keys`.
-    """
-    for key in metadata:
-        if key not in allowed_keys:
-            allowed_list = ", ".join(allowed_keys)
-            raise ParseError(
-                line_number,
-                f"unknown metadata key '{key}', expected one of: {allowed_list}",
-            )
-
-
-def _validate_zone_name(name: str, line_number: int) -> None:
-    """Validate that a zone name uses only allowed characters.
-
-    Zone names must consist only of letters, digits, and underscores.
-    This is stricter than just forbidding dashes and spaces: it also
-    keeps out characters like '[', ']', '=', and '#' that would
-    otherwise break bracket or comment parsing elsewhere in the file.
-
-    Args:
-        name: The zone name to validate.
-        line_number: The line number, for error reporting.
-
-    Raises:
-        ParseError: If the name is empty or contains a disallowed character.
-    """
-    if len(name) == 0:
-        raise ParseError(line_number, "zone name cannot be empty")
-
-    for character in name:
-        is_letter_or_digit = character.isalnum()
-        is_underscore = character == "_"
-        if not is_letter_or_digit and not is_underscore:
-            raise ParseError(
-                line_number,
-                f"invalid zone name '{name}': only letters, digits, "
-                "and underscores are allowed",
-            )
-
-
 class MapParser:
-    """Parses a Fly-in map file into a Graph and a drone count."""
+    """Parses a Fly-in map file into a Graph and a drone count.
+
+    Every piece of parsing logic lives as a method on this class,
+    including the small string-handling helpers, so the parser is
+    fully object-oriented rather than a class wrapping standalone
+    module-level functions.
+    """
 
     def parse(self, path: str) -> Tuple[Graph, int]:
         """Parse the map file at the given path.
@@ -321,7 +179,7 @@ class MapParser:
         value = value.strip()
         if not value:
             raise ParseError(line_number, "'nb_drones:' requires a value")
-        return _positive_int(value, "nb_drones", line_number)
+        return MapParser._positive_int(value, "nb_drones", line_number)
 
     def _parse_zone_line(
         self,
@@ -346,8 +204,8 @@ class MapParser:
             ParseError: If the line is malformed or fails validation.
         """
         body = line[len(prefix):].strip()
-        main_part, metadata = _split_metadata(body, line_number)
-        _validate_metadata_keys(metadata, _ZONE_METADATA_KEYS, line_number)
+        main_part, metadata = self._split_metadata(body, line_number)
+        self._validate_metadata_keys(metadata, _ZONE_METADATA_KEYS, line_number)
 
         tokens = main_part.split()
         if len(tokens) != 3:
@@ -356,7 +214,7 @@ class MapParser:
                 f"expected '<name> <x> <y>', got '{main_part}'",
             )
         name, x_str, y_str = tokens
-        _validate_zone_name(name, line_number)
+        self._validate_zone_name(name, line_number)
 
         try:
             x, y = int(x_str), int(y_str)
@@ -374,7 +232,9 @@ class MapParser:
         color = metadata.get("color")
 
         if "max_drones" in metadata and not (is_start or is_end):
-            max_drones = _positive_int(metadata["max_drones"], "max_drones", line_number)
+            max_drones = self._positive_int(
+                metadata["max_drones"], "max_drones", line_number
+            )
         else:
             # Ignored (not an error) on start/end zones per spec.
             max_drones = 1
@@ -408,8 +268,10 @@ class MapParser:
             ParseError: If the line is malformed or references unknown zones.
         """
         body = line[len("connection:"):].strip()
-        main_part, metadata = _split_metadata(body, line_number)
-        _validate_metadata_keys(metadata, _CONNECTION_METADATA_KEYS, line_number)
+        main_part, metadata = self._split_metadata(body, line_number)
+        self._validate_metadata_keys(
+            metadata, _CONNECTION_METADATA_KEYS, line_number
+        )
 
         if "-" not in main_part:
             raise ParseError(
@@ -430,7 +292,7 @@ class MapParser:
             )
 
         if "max_link_capacity" in metadata:
-            capacity = _positive_int(
+            capacity = self._positive_int(
                 metadata["max_link_capacity"], "max_link_capacity", line_number
             )
         else:
@@ -445,3 +307,150 @@ class MapParser:
             graph.add_connection(connection)
         except ValueError as exc:
             raise ParseError(line_number, str(exc)) from exc
+
+    @staticmethod
+    def _parse_metadata(raw: str, line_number: int) -> Dict[str, str]:
+        """Parse a bracketed metadata block into a key-value dict.
+
+        Args:
+            raw: The text found between '[' and ']', e.g.
+                "zone=restricted color=red max_drones=2".
+            line_number: The line this metadata came from, for errors.
+
+        Returns:
+            Dict[str, str]: Metadata keys mapped to their raw string values.
+
+        Raises:
+            ParseError: If a token inside the brackets is not valid key=value.
+        """
+        metadata: Dict[str, str] = {}
+        tokens = raw.split()
+
+        for token in tokens:
+            equals_count = token.count("=")
+
+            if equals_count != 1:
+                raise ParseError(line_number, f"invalid metadata token '{token}'")
+
+            parts = token.split("=")
+            key = parts[0]
+            value = parts[1]
+
+            if len(key) == 0:
+                raise ParseError(line_number, f"invalid metadata token '{token}'")
+
+            if len(value) == 0:
+                raise ParseError(line_number, f"invalid metadata token '{token}'")
+
+            metadata[key] = value
+
+        return metadata
+
+    @staticmethod
+    def _split_metadata(line: str, line_number: int) -> Tuple[str, Dict[str, str]]:
+        """Split a line into its main content and optional metadata dict.
+
+        Args:
+            line: The full line content after the type prefix.
+            line_number: The line number, for error reporting.
+
+        Returns:
+            Tuple[str, Dict[str, str]]: The content before any '[...]'
+            block, and the parsed metadata (empty dict if none present).
+
+        Raises:
+            ParseError: If brackets are unbalanced or malformed.
+        """
+        if "[" not in line:
+            if "]" in line:
+                raise ParseError(line_number, "unmatched ']' with no opening '['")
+            return line.strip(), {}
+
+        open_idx = line.index("[")
+        if not line.rstrip().endswith("]"):
+            raise ParseError(line_number, "metadata block missing closing ']'")
+        close_idx = line.rindex("]")
+        if close_idx < open_idx:
+            raise ParseError(line_number, "metadata block missing opening '['")
+
+        main_part = line[:open_idx].strip()
+        meta_part = line[open_idx + 1:close_idx].strip()
+        metadata = MapParser._parse_metadata(meta_part, line_number)
+        return main_part, metadata
+
+    @staticmethod
+    def _positive_int(value: str, field_name: str, line_number: int) -> int:
+        """Parse a string as a positive integer.
+
+        Args:
+            value: The raw string to parse.
+            field_name: The metadata field name, for error messages.
+            line_number: The line number, for error reporting.
+
+        Returns:
+            int: The parsed positive integer.
+
+        Raises:
+            ParseError: If the value is not a positive integer.
+        """
+        try:
+            parsed = int(value)
+        except ValueError as exc:
+            raise ParseError(
+                line_number, f"'{field_name}' must be an integer, got '{value}'"
+            ) from exc
+        if parsed <= 0:
+            raise ParseError(
+                line_number, f"'{field_name}' must be a positive integer, got {parsed}"
+            )
+        return parsed
+
+    @staticmethod
+    def _validate_metadata_keys(
+        metadata: Dict[str, str], allowed_keys: Tuple[str, ...], line_number: int
+    ) -> None:
+        """Check that every metadata key is one of the allowed keys.
+
+        Args:
+            metadata: The parsed key-value metadata dict.
+            allowed_keys: The only keys permitted in this context.
+            line_number: The line number, for error reporting.
+
+        Raises:
+            ParseError: If any key in `metadata` is not in `allowed_keys`.
+        """
+        for key in metadata:
+            if key not in allowed_keys:
+                allowed_list = ", ".join(allowed_keys)
+                raise ParseError(
+                    line_number,
+                    f"unknown metadata key '{key}', expected one of: {allowed_list}",
+                )
+
+    @staticmethod
+    def _validate_zone_name(name: str, line_number: int) -> None:
+        """Validate that a zone name uses only allowed characters.
+
+        Zone names must consist only of letters, digits, and underscores.
+        This is stricter than just forbidding dashes and spaces: it also
+        keeps out characters like '[', ']', '=', and '#' that would
+        otherwise break bracket or comment parsing elsewhere in the file.
+
+        Args:
+            name: The zone name to validate.
+            line_number: The line number, for error reporting.
+
+        Raises:
+            ParseError: If the name is empty or contains a disallowed character.
+        """
+        if len(name) == 0:
+            raise ParseError(line_number, "zone name cannot be empty")
+
+        for character in name:
+            is_dash = character == "-"
+            is_space = character == " "
+            if is_dash or is_space:
+                raise ParseError(
+                    line_number,
+                    f"invalid zone name '{name}': only letters, digits",
+                )
